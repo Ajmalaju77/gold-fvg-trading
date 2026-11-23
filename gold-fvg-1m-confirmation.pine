@@ -1,0 +1,115 @@
+//@version=5
+// Gold FVG 15m + 1m Confirmation - 1R Target
+// Use on: XAUUSD / GOLD, 15 minute chart
+// Rules tested: FVG >= $2 on 15m, price retraces into FVG within 20 bars,
+// 1m candle closes above previous 1m high (long) / below previous 1m low (short),
+// Entry at that 1m close, SL = gap edge - $1 buffer, TP = 1R by default (change input to 1.5 / 2.0)
+// This is an indicator, not a guarantee. Backtest results: 1R pure FVG 52% win on Gold,
+// FVG+1m at 2R was 41.5% win in a 21-day test. Past results do not predict future results.
+indicator("Gold FVG 15m + 1m Confirmation - 1R", shorttitle="Gold FVG 1R", overlay=true)
+
+// ---------- Inputs ----------
+fvgMin    = input.float(2.0, "Min FVG size ($)", minval=0.5, step=0.5)
+tpMult    = input.float(1.0, "TP multiplier (R)", minval=0.5, step=0.5)
+slBuffer  = input.float(1.0, "SL buffer ($)", minval=0.0, step=0.5)
+maxWait   = input.int(20, "Max bars to wait for retracement (15m bars)", minval=5, maxval=50)
+showBoxes = input.bool(true, "Show FVG boxes")
+showLines = input.bool(true, "Show Entry / SL / TP lines")
+
+// ---------- 1m confirmation data ----------
+// request.security on 1m, lookahead off so signal only appears after 1m candle closes
+[close1, open1, high1, low1] = request.security(syminfo.tickerid, "1", [close, open, high, low], lookahead=barmerge.lookahead_off)
+bullConf = close1 > open1 and close1 > high1[1]
+bearConf = close1 < open1 and close1 < low1[1]
+
+// ---------- FVG detection on 15m ----------
+bullFVG = low > high[2] and (low - high[2]) >= fvgMin
+bearFVG = high < low[2] and (low[2] - high) >= fvgMin
+
+// ---------- State ----------
+var int    pendingDir  = 0      // 1 = waiting long, -1 = waiting short, 0 = idle
+var float  gapTop      = na
+var float  gapBot      = na
+var int    gapExpiry   = na
+var bool   waitingConf = false
+var box    fvgBox      = na
+
+// New FVG - only take a new one when idle
+if bullFVG and pendingDir == 0
+    pendingDir  := 1
+    gapTop      := low
+    gapBot      := high[2]
+    gapExpiry   := bar_index + maxWait
+    waitingConf := false
+    if showBoxes
+        fvgBox := box.new(bar_index - 2, gapTop, bar_index + maxWait, gapBot, bgcolor=color.new(color.green, 85), border_color=color.new(color.green, 50))
+
+if bearFVG and pendingDir == 0
+    pendingDir  := -1
+    gapTop      := low[2]
+    gapBot      := high
+    gapExpiry   := bar_index + maxWait
+    waitingConf := false
+    if showBoxes
+        fvgBox := box.new(bar_index - 2, gapTop, bar_index + maxWait, gapBot, bgcolor=color.new(color.red, 85), border_color=color.new(color.red, 50))
+
+// Expire pending FVG
+if pendingDir != 0 and bar_index > gapExpiry
+    pendingDir  := 0
+    waitingConf := false
+
+// Retracement into FVG
+if pendingDir == 1 and not waitingConf
+    if low <= gapTop and close > gapBot
+        waitingConf := true
+    if close <= gapBot
+        pendingDir  := 0
+        waitingConf := false
+
+if pendingDir == -1 and not waitingConf
+    if high >= gapBot and close < gapTop
+        waitingConf := true
+    if close >= gapTop
+        pendingDir  := 0
+        waitingConf := false
+
+// ---------- Signal on 1m confirmation ----------
+var float entryPrice = na
+var float slPrice    = na
+var float tpPrice    = na
+var line  entryLine  = na
+var line  slLine     = na
+var line  tpLine     = na
+
+if waitingConf and pendingDir == 1 and bullConf
+    entryPrice := close
+    slPrice    := gapBot - slBuffer
+    tpPrice    := entryPrice + tpMult * (entryPrice - slPrice)
+    label.new(bar_index, low, "LONG\nEntry " + str.tostring(entryPrice, format.mintick) + "\nSL " + str.tostring(slPrice, format.mintick) + "\nTP " + str.tostring(tpPrice, format.mintick), style=label.style_label_up, color=color.new(color.green, 0), textcolor=color.white, size=size.small)
+    if showLines
+        entryLine := line.new(bar_index, entryPrice, bar_index + 20, entryPrice, color=color.new(color.blue, 0), style=line.style_dashed)
+        slLine    := line.new(bar_index, slPrice, bar_index + 20, slPrice, color=color.new(color.red, 0), style=line.style_dashed)
+        tpLine    := line.new(bar_index, tpPrice, bar_index + 20, tpPrice, color=color.new(color.green, 0), style=line.style_dashed)
+    alert("Gold FVG Long signal - 15m FVG + 1m confirmation, Entry " + str.tostring(entryPrice), alert.freq_once_per_bar)
+    pendingDir  := 0
+    waitingConf := false
+
+if waitingConf and pendingDir == -1 and bearConf
+    entryPrice := close
+    slPrice    := gapTop + slBuffer
+    tpPrice    := entryPrice - tpMult * (slPrice - entryPrice)
+    label.new(bar_index, high, "SHORT\nEntry " + str.tostring(entryPrice, format.mintick) + "\nSL " + str.tostring(slPrice, format.mintick) + "\nTP " + str.tostring(tpPrice, format.mintick), style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white, size=size.small)
+    if showLines
+        entryLine := line.new(bar_index, entryPrice, bar_index + 20, entryPrice, color=color.new(color.blue, 0), style=line.style_dashed)
+        slLine    := line.new(bar_index, slPrice, bar_index + 20, slPrice, color=color.new(color.red, 0), style=line.style_dashed)
+        tpLine    := line.new(bar_index, tpPrice, bar_index + 20, tpPrice, color=color.new(color.green, 0), style=line.style_dashed)
+    alert("Gold FVG Short signal - 15m FVG + 1m confirmation, Entry " + str.tostring(entryPrice), alert.freq_once_per_bar)
+    pendingDir  := 0
+    waitingConf := false
+
+// ---------- Plots ----------
+// Plot FVG gap levels for the pending trade
+plot(pendingDir == 1 ? gapTop : na, "Bull Gap Top", color=color.new(color.green, 0), style=plot.style_linebr)
+plot(pendingDir == 1 ? gapBot : na, "Bull Gap Bottom", color=color.new(color.green, 50), style=plot.style_linebr)
+plot(pendingDir == -1 ? gapTop : na, "Bear Gap Top", color=color.new(color.red, 50), style=plot.style_linebr)
+plot(pendingDir == -1 ? gapBot : na, "Bear Gap Bottom", color=color.new(color.red, 0), style=plot.style_linebr)
